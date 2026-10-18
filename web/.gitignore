@@ -1,0 +1,24 @@
+# ---------------------------------------------------------------------------
+# Dependencias y artefactos de la interfaz (Nuxt)
+# ---------------------------------------------------------------------------
+
+/node_modules/
+/.nuxt/
+/.output/
+/.nitro/
+/.cache/
+/dist/
+
+# `.env` real nunca se versiona. La plantilla si.
+/.env
+/.env.local
+/.env.production
+
+# Registro de errores del editor
+*.log
+npm-debug.log*
+yarn-error.log*
+
+# Sistema operativo
+.DS_Store
+Thumbs.db

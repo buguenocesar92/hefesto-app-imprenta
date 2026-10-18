@@ -1,0 +1,154 @@
+# ---------------------------------------------------------------------------
+# Gestion de Imprenta, libreria y papeleria - DESARROLLO
+# ---------------------------------------------------------------------------
+# Aplicacion propia de Hefesto Studio. NO es un despliegue de una herramienta
+# de terceros.
+#
+# QUE CAMBIA RESPECTO DE PRODUCCION
+# --------------------------------
+#  - Los puertos se publican para poder mirar las cosas desde el escritorio.
+#  - Se monta el codigo fuente en caliente, para no reconstruir la imagen en
+#    cada cambio.
+#  - APP_DEBUG esta en `true`, porque los errores completos se quieren ver
+#    mientras se trabaja.
+#
+# LO QUE NO CAMBIA
+# ---------------
+# El aislamiento entre imprentas. Sigue siendo Row Level Security y el rol de
+# la base sigue sin BYPASSRLS. Que la aplicacion se puede depurar con `dd()`
+# al lado no significa que el aislamiento sea opcional en desarrollo: es justo
+# en desarrollo donde uno se queria saltarlo.
+#
+# Tampoco cambia la SEPARACION DE LOS DOS ROLES: `POSTGRES_USER` es el rol de
+# arranque y nace superusuario; el rol de la aplicacion lo crea
+# `deploy/postgres/inicializar-rol.sh`. En desarrollo tambien, porque un
+# `FORCE ROW LEVEL SECURITY` que se puede saltar aqui se puede saltar ahi.
+#
+# Este compose NO se usa en un servidor real. Para eso esta
+# `docker-compose.prod.yml`, que no publica ningun puerto salvo el proxy.
+#
+# Ver docs/04-INSTALACION.md.
+# ---------------------------------------------------------------------------
+
+name: imprenta-dev
+
+services:
+  postgres:
+    image: postgres:17.6-alpine
+    ports:
+      # Solo para poder conectarse desde el host con un cliente SQL.
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-imprenta_dev}
+      # Rol de ARRANQUE: la imagen oficial lo crea superusuario, asi que la
+      # aplicacion nunca entra con el. Ver la cabecera.
+      POSTGRES_USER: ${DB_ADMIN_USERNAME:-imprenta_admin}
+      POSTGRES_PASSWORD: ${DB_ADMIN_PASSWORD:-imprenta_dev_local}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+      TZ: America/Santiago
+      # Rol con el que conecta la aplicacion. Lo crea el script de arranque, con
+      # NOSUPERUSER y NOBYPASSRLS explicitos.
+      APP_DB_ROLE: ${DB_USERNAME:-imprenta_app}
+      APP_DB_PASSWORD: ${DB_PASSWORD:-imprenta_dev_local}
+    volumes:
+      - postgres_datos:/var/lib/postgresql/data
+      # Este archivo tiene que existir. Si no, Docker monta uno vacio, el rol no
+      # se crea nunca y la API no se puede conectar.
+      - ./postgres/inicializar-rol.sh:/docker-entrypoint-initdb.d/inicializar-rol.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-imprenta_app} -d ${DB_DATABASE:-imprenta_dev}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:8.2-alpine
+    ports:
+      - "127.0.0.1:6379:6379"
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD:-imprenta_dev_local}
+      --appendonly yes
+    volumes:
+      - redis_datos:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD:-imprenta_dev_local} ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    image: php:8.4-fpm-alpine
+    working_dir: /var/www/html
+    ports:
+      # En desarrollo se entra directo a la API para leer los errores.
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      APP_ENV: local
+      APP_DEBUG: "true"
+      APP_KEY: ${APP_KEY:-}
+      APP_URL: ${APP_URL:-http://localhost:8000}
+      APP_WEB_URL: ${APP_WEB_URL:-http://localhost:3000}
+
+      DB_CONNECTION: pgsql
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_DATABASE: ${DB_DATABASE:-imprenta_dev}
+      DB_USERNAME: ${DB_USERNAME:-imprenta_app}
+      DB_PASSWORD: ${DB_PASSWORD:-imprenta_dev_local}
+
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-imprenta_dev_local}
+      CACHE_STORE: redis
+      QUEUE_CONNECTION: sync
+      SESSION_DRIVER: file
+      SESSION_SECURE_COOKIE: "false"
+      SESSION_COOKIE: imprenta_sesion
+
+      AUTHENTIK_ISSUER: ${AUTHENTIK_ISSUER:-https://id.ejemplo.cl/application/o/imprenta-dev/}
+      AUTHENTIK_CLIENT_ID: ${AUTHENTIK_CLIENT_ID:-imprenta-dev}
+      AUTHENTIK_CLIENT_SECRET: ${AUTHENTIK_CLIENT_SECRET:-}
+      AUTHENTIK_REDIRECT_URI: ${AUTHENTIK_REDIRECT_URI:-http://localhost:8000/api/v1/acceso/callback}
+
+      IMPRENTA_TOLERANCIA_PIEZAS: 0
+      IMPRENTA_MERMA_AVISO_PUNTOS: 5
+      IMPRENTA_DIAS_PARA_VENCER_PRUEBA: 5
+    volumes:
+      # El codigo se monta desde el host: se edita sin reconstruir.
+      - ../api:/var/www/html
+      # El contenedor no deja basura en el codigo del host.
+      - api_vendor:/var/www/html/vendor
+      - api_storage:/var/www/html/storage
+    command: >
+      sh -c "docker-php-ext-install pdo_pgsql >/dev/null &&
+             php artisan serve --host=0.0.0.0 --port=8000"
+
+  web:
+    image: node:24.22.0-alpine3.24
+    working_dir: /app
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - api
+    environment:
+      NUXT_API_BASE: http://api:8000
+      NUXT_PUBLIC_BASE: http://localhost:3000
+    volumes:
+      - ../web:/app
+      - web_node_modules:/app/node_modules
+      - web_nuxt:/app/.nuxt
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 3000"
+
+volumes:
+  postgres_datos:
+  redis_datos:
+  api_vendor:
+  api_storage:
+  web_node_modules:
+  web_nuxt:

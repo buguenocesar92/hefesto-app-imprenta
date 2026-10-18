@@ -1,0 +1,47 @@
+# ---------------------------------------------------------------------------
+# Caddy: el unico que recibe peticiones del exterior.
+# ---------------------------------------------------------------------------
+# En produccion SOLO este contenedor publica puertos. PostgreSQL, Redis y la
+# API no se publican: viven en la red interna de Docker y no se ven desde
+# internet. Ver docs/07-SEGURIDAD.md.
+#
+# Caddy pide y renueva el certificado TLS solo. Por eso el dominio tiene que
+# apuntar a este servidor ANTES del primer arranque.
+# ---------------------------------------------------------------------------
+
+{
+	email admin@hefesto.cl
+	# El raton se avisa solo. Las cabeceras las pone la aplicacion, no Caddy.
+}
+
+# Redireccion de HTTP a HTTPS: el acceso sin cifrar manda la cookie de sesion
+# en claro.
+http://imprenta.hefesto.cl {
+	redir https://{host}{uri} permanent
+}
+
+imprenta.hefesto.cl {
+	encode zstd gzip
+
+	# Cabeceras de seguridad. `nosniff` impide que el navegador adivine el tipo
+	# de un archivo, que es como se lograria ejecutar algo subido por error.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# TODO va al contenedor web. Tambien las rutas `/api/*`, y eso es
+	# deliberado: el navegador nunca habla con la API de Laravel, Nuxt hace
+	# de intermediario (BFF) y reenvia la llamada con la cookie de sesion.
+	# Por eso la API no necesita estar expuesta al exterior ni conocer la
+	# direccion publica del proxy.
+	reverse_proxy web:3000
+
+	log {
+		output stdout
+		format json
+	}
+}
