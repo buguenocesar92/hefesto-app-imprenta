@@ -127,8 +127,8 @@ services:
 
   api:
     build:
-      context: ../api
-      dockerfile: ../deploy/api/Dockerfile
+      context: ..
+      dockerfile: deploy/api/Dockerfile
     restart: unless-stopped
     # Sin `ports`. El unico camino desde internet es el proxy -> web -> API.
     expose:
